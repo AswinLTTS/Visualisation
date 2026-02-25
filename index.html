@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>LEO-2 Satellite Visualization</title>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.113/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.113/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    #cesiumContainer {
+      width: 100%;
+      height: 100%;
+    }
+
+    #statsPanel {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0, 0, 0, 0.85);
+      color: white;
+      padding: 20px;
+      border-radius: 10px;
+      font-size: 14px;
+      z-index: 1000;
+      min-width: 280px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+
+    #statsPanel h3 {
+      margin: 0 0 15px 0;
+      font-size: 18px;
+      color: #00d4ff;
+      border-bottom: 2px solid #00d4ff;
+      padding-bottom: 8px;
+    }
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      margin: 10px 0;
+      padding: 6px 0;
+    }
+
+    .stat-label {
+      color: #aaa;
+    }
+
+    .stat-value {
+      font-weight: bold;
+      color: #00ff88;
+    }
+
+    .handover-flash {
+      color: #ff3366 !important;
+      animation: pulse 0.5s ease-in-out;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.3;
+      }
+    }
+
+    #chartContainer {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      width: 420px;
+      height: 220px;
+      background: rgba(0, 0, 0, 0.85);
+      padding: 15px;
+      border-radius: 10px;
+      z-index: 1000;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+
+    #chartContainer h4 {
+      margin: 0 0 10px 0;
+      color: #00d4ff;
+      font-size: 15px;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="cesiumContainer"></div>
+
+  <div id="statsPanel">
+    <h3> Network Status</h3>
+    <div class="stat-row">
+      <span class="stat-label">Connected Satellite:</span>
+      <span class="stat-value" id="currentSat">--</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Total Handovers:</span>
+      <span class="stat-value" id="handoverCount">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Bytes Received:</span>
+      <span class="stat-value" id="bytesRx">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Throughput:</span>
+      <span class="stat-value" id="throughput">0 KB/s</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Sim Time:</span>
+      <span class="stat-value" id="simTime">0s</span>
+    </div>
+  </div>
+
+  <div id="chartContainer">
+    <h4> Network & PHY Metrics</h4>
+    <div style="height: 33%; position: relative;">
+      <canvas id="throughputChart"></canvas> <!-- Throughput -->
+    </div>
+    <div style="height: 33%; position: relative; margin-top: 5px;">
+      <canvas id="sinrChart"></canvas> <!-- SINR -->
+    </div>
+    <div style="height: 33%; position: relative; margin-top: 5px;">
+      <canvas id="powerChart"></canvas> <!-- Power -->
+    </div>
+  </div>
+
+  <script src="charts.js"></script>
+  <script>
+    // Use OpenStreetMap imagery (no token required)
+    Cesium.Ion.defaultAccessToken = undefined;
+
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+      imageryProvider: new Cesium.SingleTileImageryProvider({
+        url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEBgIApD5fRAAAAABJRU5ErkJggg==' // Transparent 1x1 pixel
+      }),
+      baseLayerPicker: true,
+      sceneModePicker: false,
+      navigationHelpButton: false,
+      animation: true,
+      timeline: true,
+      shouldAnimate: true,
+      requestRenderMode: false,
+      maximumRenderTimeChange: Infinity
+    });
+
+    // ... (Globe setup lines 152-168 remain if not replaced, but assuming context match) ...
+
+    /* ---------- Chart Setup ---------- */
+    // Helper from charts.js used here
+    // But we need to Init them.
+    // Assuming charts.js is loaded successfully. If not, define helper here or rely on script tag.
+
+    // Resize container
+    document.getElementById('chartContainer').style.height = '400px';
+
+    const throughputChart = createMetricChart('throughputChart', 'Throughput (KB/s)', '#00ff88', 'KB/s');
+    const sinrChart = createMetricChart('sinrChart', 'Link Quality (SINR dB)', '#00d4ff', 'dB');
+    const powerChart = createMetricChart('powerChart', 'Received Signal Power (dBm)', '#ffaa00', 'dBm', null, null);
+
+    /* ---------- Data Storage ---------- */
+    const satelliteEntities = {};
+    let handoverData = [];
+    let throughputData = [];
+    let currentConnectedSat = null;
+    let visualConnectedSat = null;
+    let handoverCount = 0;
+    let sinrData = [];
+    let powerData = [];
+    // ... other vars ...
+
+    /* ---------- Load Data ---------- */
+    Promise.all([
+      fetch("orbits.json").then(r => r.json()),
+      fetch("handovers.json").then(r => r.json()),
+      fetch("throughput.json").then(r => r.json()),
+      fetch("ground_stations.json").then(r => r.json()),
+      fetch("sinr.json").then(r => r.json()).catch(e => []),
+      fetch("rx_power.json").then(r => r.json()).catch(e => [])
+    ]).then(([orbits, handovers, throughput, groundStations, sinr, power]) => {
+      handoverData = handovers;
+      throughputData = throughput;
+      sinrData = sinr;
+      powerData = power;
+
+      // Set a nice blue color for the globe
+      viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#1e3a5f');
+      viewer.scene.globe.enableLighting = true; // Enable sun lighting for visual depth
+      viewer.scene.globe.maximumScreenSpaceError = 1.5;
+      viewer.scene.globe.showWaterEffect = false;
+
+      /* ---------- Simulation Time ---------- */
+      // Default start time
+      viewer.clock.startTime = Cesium.JulianDate.fromDate(new Date(2024, 0, 1, 0, 0, 0));
+      viewer.clock.currentTime = viewer.clock.startTime.clone();
+
+      // Default stop time (will be updated after loading data)
+      viewer.clock.stopTime = Cesium.JulianDate.addSeconds(viewer.clock.startTime, 3600, new Cesium.JulianDate());
+
+      viewer.clock.multiplier = 10;
+      viewer.clock.shouldAnimate = true;
+      viewer.clock.clockRange = Cesium.ClockRange.LOOP_STOP;
+
+      // CRITICAL FIX: Force continuous animation by manually advancing currentTime
+      // This bypasses canAnimate=false issue in some environments
+      let lastFrameTime = performance.now();
+
+      function animate() {
+        if (viewer.clock.shouldAnimate && !viewer.isDestroyed()) {
+          const now = performance.now();
+          const deltaMs = now - lastFrameTime;
+          lastFrameTime = now;
+
+          // Manually advance currentTime based on multiplier
+          // Only advance if data is loaded (stopTime > startTime)
+          if (Cesium.JulianDate.compare(viewer.clock.stopTime, viewer.clock.startTime) > 0) {
+            const deltaSeconds = (deltaMs / 1000) * viewer.clock.multiplier;
+            viewer.clock.currentTime = Cesium.JulianDate.addSeconds(
+              viewer.clock.currentTime,
+              deltaSeconds,
+              new Cesium.JulianDate()
+            );
+
+            // Handle loop behavior
+            if (Cesium.JulianDate.compare(viewer.clock.currentTime, viewer.clock.stopTime) >= 0) {
+              if (viewer.clock.clockRange === Cesium.ClockRange.LOOP_STOP) {
+                viewer.clock.currentTime = viewer.clock.startTime.clone();
+              } else {
+                viewer.clock.currentTime = viewer.clock.stopTime.clone();
+                // Don't stop animation, just loop or hold depending on logic
+                // For this vis, let's just loop seamlessly if requested
+                viewer.clock.currentTime = viewer.clock.startTime.clone();
+              }
+            }
+          }
+        } else {
+          lastFrameTime = performance.now(); // Reset delta if paused
+        }
+        requestAnimationFrame(animate);
+      }
+
+      // Start the forced animation loop
+      setTimeout(() => {
+        lastFrameTime = performance.now();
+        animate();
+        console.log('✓ Manual animation loop started - satellites tracks dynamic duration');
+      }, 1500);
+
+      /* ---------- Ground Infrastructure (loaded dynamically) ---------- */
+      let gwPosition = null;
+      const utPositions = [];
+
+
+
+
+      handoverData = handovers;
+      throughputData = throughput.map(d => ({ time: d.time, value: (d.bytes_rx / 1024), bytes_rx: d.bytes_rx }));
+      sinrData = sinr.map(d => ({ time: d.time, value: d.sinr }));
+      // Convert Watts to dBm: 10 * log10(watts * 1000)
+      powerData = power
+        .filter(d => d.power > 0)
+        .map(d => ({ time: d.time, value: 10 * Math.log10(d.power * 1000) }));
+
+      // DYNAMIC TIME UPDATE: Find max time from orbit data
+      let maxTime = 0;
+      Object.values(orbits).forEach(satData => {
+        if (satData.length > 0) {
+          const lastSample = satData[satData.length - 1];
+          if (lastSample.time > maxTime) maxTime = lastSample.time;
+        }
+      });
+
+      if (maxTime > 0) {
+        console.log(`✓ Detected simulation duration: ${maxTime} seconds`);
+        viewer.clock.stopTime = Cesium.JulianDate.addSeconds(viewer.clock.startTime, maxTime, new Cesium.JulianDate());
+        viewer.timeline.zoomTo(viewer.clock.startTime, viewer.clock.stopTime);
+      }
+
+      console.log(`✓ Loaded ${Object.keys(orbits).length} satellites, ${handoverData.length} handovers, ${throughputData.length} samples`);
+
+      /* ---------- Create Ground Stations ---------- */
+      // Create Gateway
+      groundStations.gateways.forEach(gw => {
+        gwPosition = Cesium.Cartesian3.fromDegrees(gw.lon, gw.lat, gw.alt);
+        viewer.entities.add({
+          name: "Gateway-" + gw.id,
+          position: gwPosition,
+          point: {
+            pixelSize: 18,
+            color: Cesium.Color.ORANGERED,
+            outlineColor: Cesium.Color.WHITE,
+            outlineWidth: 3
+          },
+          label: {
+            text: "GW",
+            font: '14px bold sans-serif',
+            fillColor: Cesium.Color.WHITE,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 2,
+            pixelOffset: new Cesium.Cartesian2(0, -28),
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            showBackground: true,
+            backgroundColor: Cesium.Color.ORANGERED.withAlpha(0.7)
+          }
+        });
+      });
+
+      // Create User Terminals
+      groundStations.uts.forEach(ut => {
+        const utPos = Cesium.Cartesian3.fromDegrees(ut.lon, ut.lat, ut.alt);
+        utPositions.push(utPos);
+        viewer.entities.add({
+          name: "UT-" + ut.id,
+          position: utPos,
+          point: {
+            pixelSize: 12,
+            color: Cesium.Color.DEEPSKYBLUE,
+            outlineColor: Cesium.Color.WHITE,
+            outlineWidth: 2
+          },
+          label: {
+            text: "UT" + ut.id,
+            font: '11px sans-serif',
+            fillColor: Cesium.Color.WHITE,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 2,
+            pixelOffset: new Cesium.Cartesian2(0, -20),
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE
+          }
+        });
+      });
+
+      console.log(`✓ Created ${groundStations.gateways.length} gateways and ${groundStations.uts.length} UTs`);
+
+      /* ---------- Create Satellites ---------- */
+      viewer.entities.suspendEvents(); // OPTIMIZATION: Suspend events for batch creation (1584 sats)
+
+      Object.keys(orbits).forEach(id => {
+        const samples = orbits[id];
+        const position = new Cesium.SampledPositionProperty();
+
+        // Optimized sample addition
+        const times = [];
+        const positions = [];
+        const start = Cesium.JulianDate.fromDate(new Date(2024, 0, 1, 0, 0, 0));
+
+        samples.forEach(p => {
+          times.push(Cesium.JulianDate.addSeconds(start, p.time, new Cesium.JulianDate()));
+          // Support both Cartesian (x,y,z) and Geodetic (lon,lat,alt)
+          if (p.x !== undefined && p.y !== undefined && p.z !== undefined) {
+            positions.push(new Cesium.Cartesian3(p.x, p.y, p.z));
+          } else {
+            positions.push(Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.alt));
+          }
+        });
+        position.addSamples(times, positions);
+
+        position.setInterpolationOptions({
+          interpolationDegree: 2, // Reducing degree for performance with so many sats
+          interpolationAlgorithm: Cesium.LagrangePolynomialApproximation
+        });
+
+        // Use standard Billboard
+        const sat = viewer.entities.add({
+          name: "SAT-" + id,
+          position: position,
+          billboard: {
+            image: 'data:image/svg+xml;base64,' + btoa(`
+              <svg width="32" height="32" xmlns="http://www.w3.org/2000/svg">
+                <rect x="10" y="14" width="12" height="4" fill="#00FFFF" stroke="#FFF" stroke-width="1"/>
+                <rect x="4" y="14" width="4" height="4" fill="#4488FF" stroke="#FFF" stroke-width="0.5"/>
+                <rect x="24" y="14" width="4" height="4" fill="#4488FF" stroke="#FFF" stroke-width="0.5"/>
+                <circle cx="16" cy="10" r="2" fill="#FFD700" stroke="#FFF" stroke-width="0.5"/>
+              </svg>
+            `),
+            scale: 0.8, // Smaller for dense constellation
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 50000000)
+          },
+          label: {
+            text: "SAT-" + id,
+            font: '10px monospace',
+            fillColor: Cesium.Color.CYAN,
+            show: false, // Hidden by default to save FPS
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 2000000)
+          },
+          path: {
+            resolution: 60, // Lower resolution (1 point per min) is fine for overview
+            material: new Cesium.PolylineGlowMaterialProperty({
+              glowPower: 0.1,
+              color: Cesium.Color.CYAN.withAlpha(0.4)
+            }),
+            width: 1,
+            leadTime: 0,
+            trailTime: 60 // 1 minute trail (show short tail)
+          }
+        });
+        satelliteEntities[id] = sat;
+      });
+
+      viewer.entities.resumeEvents(); // Resume events
+      console.log(`✓ Created ${Object.keys(satelliteEntities).length} satellite entities (Optimized)`);
+
+      /* ---------- GW/UT → Satellite Links ---------- */
+      let gwLinkEntity = viewer.entities.add({
+        polyline: {
+          positions: [gwPosition || Cesium.Cartesian3.ZERO, gwPosition || Cesium.Cartesian3.ZERO],
+          width: 4,
+          material: new Cesium.PolylineGlowMaterialProperty({
+            glowPower: 0.3,
+            color: Cesium.Color.ORANGERED
+          })
+        }
+      });
+
+      // Create links for UTs
+      const utLinkEntities = utPositions.map(utPos =>
+        viewer.entities.add({
+          polyline: {
+            positions: [utPos, utPos],
+            width: 2,
+            material: new Cesium.PolylineGlowMaterialProperty({
+              glowPower: 0.25,
+              color: Cesium.Color.DEEPSKYBLUE
+            })
+          }
+        })
+      );
+
+      /* ---------- Update Loop ---------- */
+      let lastHandoverIndex = -1;
+      let lastThroughputIndex = -1;
+      let totalBytesRx = 0;
+      let frameCount = 0;
+
+      viewer.clock.onTick.addEventListener(() => {
+        frameCount++;
+        const currentTime = viewer.clock.currentTime;
+        let simSeconds = Cesium.JulianDate.secondsDifference(currentTime, viewer.clock.startTime);
+
+        // Handle loop reset
+        if (simSeconds < 0 || simSeconds > maxTime) {
+          simSeconds = 0;
+          lastHandoverIndex = -1;
+          lastThroughputIndex = -1;
+          handoverCount = 0;
+          totalBytesRx = 0;
+          currentConnectedSat = null;
+          visualConnectedSat = null;
+          [throughputChart, sinrChart, powerChart].forEach(c => {
+            if (c && c.data) {
+              c.data.labels = [];
+              c.data.datasets[0].data = [];
+              c.update();
+            }
+          });
+        }
+
+        // Update UI and link every few frames for performance
+        if (frameCount % 3 === 0) {
+          document.getElementById('simTime').textContent = simSeconds.toFixed(1) + 's';
+
+          // Find closest satellite
+          let bestSat = null;
+          let bestDist = Number.MAX_VALUE;
+          let bestId = null;
+
+          Object.entries(satelliteEntities).forEach(([id, sat]) => {
+            const pos = sat.position.getValue(currentTime);
+            if (!pos) return;
+
+            const d = Cesium.Cartesian3.distance(gwPosition, pos);
+            if (d < bestDist) {
+              bestDist = d;
+              bestSat = pos;
+              bestId = id;
+            }
+          });
+
+          // Update links (GW and UTs)
+          if (bestSat && bestDist < 3000000) {
+            visualConnectedSat = bestId;
+
+            // Update GW link
+            if (gwPosition) {
+              gwLinkEntity.polyline.positions = [gwPosition, bestSat];
+              gwLinkEntity.show = true;
+            }
+
+            // Update UT links
+            utLinkEntities.forEach((linkEntity, idx) => {
+              if (idx < utPositions.length) {
+                linkEntity.polyline.positions = [utPositions[idx], bestSat];
+                linkEntity.show = true;
+              }
+            });
+          } else {
+            gwLinkEntity.show = false;
+            utLinkEntities.forEach(link => link.show = false);
+            visualConnectedSat = null;
+          }
+
+          // Update satellite colors and labels
+          Object.entries(satelliteEntities).forEach(([id, sat]) => {
+            const isActive = (visualConnectedSat === id || currentConnectedSat === id);
+            sat.billboard.color = isActive ? Cesium.Color.LIME : Cesium.Color.CYAN;
+            sat.label.fillColor = isActive ? Cesium.Color.LIME : Cesium.Color.CYAN;
+            sat.label.show = isActive;
+          });
+        }
+
+        // Check for handover events
+        for (let i = lastHandoverIndex + 1; i < handoverData.length; i++) {
+          if (handoverData[i].time <= simSeconds) {
+            currentConnectedSat = handoverData[i].new_sat;
+            handoverCount++;
+
+            const satElement = document.getElementById('currentSat');
+            satElement.classList.add('handover-flash');
+            setTimeout(() => satElement.classList.remove('handover-flash'), 600);
+
+            lastHandoverIndex = i;
+          } else {
+            break;
+          }
+        }
+
+        // Update status panel
+        const displaySat = visualConnectedSat || currentConnectedSat || "--";
+        const simSatText = currentConnectedSat && currentConnectedSat !== visualConnectedSat
+          ? ` (Sim: ${currentConnectedSat})` : "";
+        document.getElementById('currentSat').textContent = "SAT-" + displaySat + simSatText;
+        document.getElementById('handoverCount').textContent = handoverCount;
+
+        // Update throughput data
+        for (let i = lastThroughputIndex + 1; i < throughputData.length; i++) {
+          if (throughputData[i].time <= simSeconds) {
+            const bytesPerSec = throughputData[i].bytes_rx;
+            totalBytesRx += bytesPerSec;
+
+            document.getElementById('bytesRx').textContent = totalBytesRx.toLocaleString();
+
+            const throughputKBps = (bytesPerSec / 1024).toFixed(2);
+            document.getElementById('throughput').textContent = throughputKBps + ' KB/s';
+
+            lastThroughputIndex = i;
+          } else {
+            break;
+          }
+        }
+
+        // Update All Charts (Windowed)
+        updateChartData(throughputChart, throughputData, simSeconds, 60);
+        updateChartData(sinrChart, sinrData, simSeconds, 60);
+        updateChartData(powerChart, powerData, simSeconds, 60);
+      });
+
+      // Set initial camera position (centered on Asia region with GW/UTs)
+      const centerLat = gwPosition ? groundStations.gateways[0].lat : 18;
+      const centerLon = gwPosition ? groundStations.gateways[0].lon : 110;
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(centerLon, centerLat, 8000000),
+        duration: 2
+      });
+
+    }).catch(error => {
+      console.error("Error loading data:", error);
+      alert("Failed to load data. Check console.");
+    });
+  </script>
+</body>
+
+</html>
