@@ -1,0 +1,1089 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>LEO-2 Satellite Visualization</title>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.113/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.113/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --bg-panel:    rgba(4, 12, 24, 0.93);
+      --bg-panel-2:  rgba(6, 16, 32, 0.96);
+      --border:      rgba(0, 212, 255, 0.22);
+      --border-h:    rgba(0, 212, 255, 0.5);
+      --accent:      #00d4ff;
+      --accent2:     #00ff88;
+      --warn:        #ffaa00;
+      --danger:      #ff3366;
+      --gw-color:    #ff6b35;
+      --ut-color:    #00bfff;
+      --sat-active:  #39ff14;
+      --sat-inactive:#00e5ff;
+      --link-sim:    #39ff14;
+      --link-visual: rgba(0, 191, 255, 0.45);
+      --link-gw:     #ff6b35;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html, body {
+      width: 100%; height: 100%;
+      margin: 0; padding: 0;
+      overflow: hidden;
+      font-family: 'Share Tech Mono', monospace;
+      background: #020810;
+    }
+
+    #cesiumContainer { width: 100%; height: 100%; }
+
+    .cesium-viewer-toolbar,
+    .cesium-viewer-animationContainer,
+    .cesium-viewer-bottom { display: none !important; }
+
+    /* ── HEADER ── */
+    #header {
+      position: absolute; top: 0; left: 0; right: 0; height: 48px;
+      background: linear-gradient(180deg, rgba(2,8,20,0.98) 0%, transparent 100%);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; padding: 0 18px;
+      justify-content: space-between; z-index: 1100;
+    }
+    #header h1 {
+      font-family: 'Orbitron', sans-serif; font-size: 14px; font-weight: 900;
+      letter-spacing: 5px; color: var(--accent); margin: 0;
+      text-shadow: 0 0 16px var(--accent), 0 0 32px rgba(0,212,255,0.3);
+    }
+    .live-badge {
+      font-size: 10px; letter-spacing: 3px; color: var(--accent2);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .live-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--accent2); box-shadow: 0 0 8px var(--accent2);
+      animation: livepulse 1.4s ease-in-out infinite;
+    }
+    @keyframes livepulse {
+      0%,100% { opacity:1; transform:scale(1); }
+      50%      { opacity:0.35; transform:scale(0.65); }
+    }
+
+    /* ── MODE TOGGLE (top right, below badge) ── */
+    #modeToggle {
+      position: absolute; top: 56px; right: 10px;
+      background: var(--bg-panel-2);
+      border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 14px;
+      z-index: 1050; display: flex; align-items: center; gap: 10px;
+      font-size: 10px; letter-spacing: 2px; color: rgba(180,220,255,0.6);
+      backdrop-filter: blur(14px);
+    }
+    #modeToggle span { color: rgba(180,220,255,0.45); }
+    .mode-btn {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 9px; letter-spacing: 2px;
+      padding: 4px 10px; border-radius: 3px; cursor: pointer;
+      border: 1px solid rgba(0,212,255,0.25);
+      background: transparent; color: rgba(180,220,255,0.45);
+      transition: all 0.18s; text-transform: uppercase;
+    }
+    .mode-btn.active {
+      background: rgba(0,212,255,0.15);
+      border-color: var(--accent);
+      color: #fff;
+      box-shadow: 0 0 8px rgba(0,212,255,0.25);
+    }
+
+    /* ── SHARED PANEL BASE ── */
+    .panel {
+      position: absolute; background: var(--bg-panel);
+      border: 1px solid var(--border); border-radius: 6px;
+      backdrop-filter: blur(14px); z-index: 1000;
+      box-shadow: 0 0 24px rgba(0,212,255,0.06), 0 4px 20px rgba(0,0,0,0.5);
+    }
+    .panel-title {
+      font-family: 'Orbitron', sans-serif; font-size: 9px; font-weight: 700;
+      letter-spacing: 4px; color: var(--accent); text-transform: uppercase;
+      border-bottom: 1px solid var(--border); padding-bottom: 8px; margin: 0 0 10px 0;
+    }
+
+    /* ── STATS PANEL ── */
+    #statsPanel { top: 56px; left: 10px; padding: 14px 16px; min-width: 285px; }
+    .stat-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 5px 0; border-bottom: 1px solid rgba(0,212,255,0.05); font-size: 11px;
+    }
+    .stat-row:last-child { border-bottom: none; }
+    .stat-label { color: rgba(180,220,255,0.5); }
+    .stat-value { font-weight: bold; color: var(--accent2); letter-spacing: 1px; }
+    .stat-value.warn   { color: var(--warn); }
+    .stat-value.danger { color: var(--danger); }
+    .stat-value.muted  { color: rgba(180,220,255,0.3); font-weight: normal; font-style: italic; }
+    .handover-flash {
+      color: var(--danger) !important;
+      animation: hpulse 0.5s ease-in-out 2;
+    }
+    @keyframes hpulse { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+    /* ── LEGEND PANEL ── */
+    #legendPanel { top: 108px; right: 10px; padding: 12px 14px; min-width: 220px; }
+    .legend-section-title {
+      font-size: 8px; letter-spacing: 3px; color: rgba(180,220,255,0.35);
+      text-transform: uppercase; margin: 10px 0 5px 0;
+    }
+    .legend-section-title:first-of-type { margin-top: 0; }
+    .legend-item {
+      display: flex; align-items: center; gap: 9px;
+      margin: 5px 0; font-size: 10px; color: rgba(180,220,255,0.7);
+    }
+    .leg-icon { width: 16px; height: 16px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+    .leg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .leg-diamond { width: 10px; height: 10px; flex-shrink: 0; transform: rotate(45deg); }
+    .leg-triangle {
+      width: 0; height: 0;
+      border-left: 6px solid transparent;
+      border-right: 6px solid transparent;
+      border-bottom: 10px solid currentColor;
+      flex-shrink: 0;
+    }
+    .leg-line { width: 28px; height: 2px; border-radius: 1px; flex-shrink: 0; }
+    .leg-line.dashed { background: none !important; border-top: 2px dashed var(--link-visual); height: 0; }
+
+    /* ── UT PANEL ── */
+    #utPanel {
+      bottom: 260px; left: 10px;
+      padding: 12px 14px; min-width: 280px;
+      max-height: 200px; overflow-y: auto;
+    }
+    .ut-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 4px 0; border-bottom: 1px solid rgba(0,212,255,0.04);
+      font-size: 10px; cursor: pointer; border-radius: 2px;
+      transition: background 0.15s;
+    }
+    .ut-row:hover { background: rgba(0,212,255,0.05); }
+    .ut-row.selected { background: rgba(0,212,255,0.1); border-color: rgba(0,212,255,0.2) !important; }
+    .ut-row-left { display: flex; align-items: center; gap: 6px; }
+    .ut-id { color: var(--ut-color); font-weight: bold; }
+    .ut-sat { letter-spacing: 1px; }
+    .ut-sat.sim  { color: var(--sat-active); }
+    .ut-sat.vis  { color: rgba(0,212,255,0.6); font-style: italic; }
+    .ut-sat.none { color: rgba(255,255,255,0.2); }
+    .ut-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .ut-dot.active   { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); animation: livepulse 1.2s ease-in-out infinite; }
+    .ut-dot.inactive { background: rgba(255,255,255,0.18); }
+    .ut-mode-badge {
+      font-size: 8px; letter-spacing: 1px; padding: 1px 4px;
+      border-radius: 2px; flex-shrink: 0;
+    }
+    .ut-mode-badge.sim { background: rgba(57,255,20,0.15); color: var(--sat-active); border: 1px solid rgba(57,255,20,0.3); }
+    .ut-mode-badge.vis { background: rgba(0,191,255,0.12); color: var(--ut-color); border: 1px solid rgba(0,191,255,0.25); }
+
+    /* ── CHART PANEL ── */
+    #chartContainer {
+      bottom: 10px; right: 10px; width: 440px;
+      padding: 12px 14px;
+    }
+    .chart-block { margin-bottom: 8px; }
+    .chart-block:last-child { margin-bottom: 0; }
+    .chart-label {
+      font-size: 8px; letter-spacing: 2px; color: rgba(180,220,255,0.4);
+      text-transform: uppercase; margin-bottom: 2px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .chart-label span { color: rgba(180,220,255,0.25); font-size: 7px; letter-spacing: 1px; }
+    .chart-wrap { height: 66px; position: relative; }
+
+    /* ── HANDOVER TOAST ── */
+    #handoverToast {
+      position: absolute; top: 58px; left: 50%; transform: translateX(-50%);
+      background: rgba(255,51,102,0.12); border: 1px solid var(--danger);
+      color: var(--danger); font-family: 'Orbitron', sans-serif;
+      font-size: 11px; letter-spacing: 3px; padding: 8px 20px;
+      border-radius: 4px; z-index: 1200; opacity: 0;
+      transition: opacity 0.25s; pointer-events: none;
+      white-space: nowrap; backdrop-filter: blur(8px);
+    }
+    #handoverToast.show { opacity: 1; }
+
+    /* ── INSPECT CARD ── */
+    #inspectCard {
+      position: absolute; z-index: 1300;
+      background: var(--bg-panel-2);
+      border: 1px solid rgba(0,212,255,0.4);
+      border-radius: 6px; padding: 14px 16px;
+      min-width: 200px; max-width: 240px;
+      backdrop-filter: blur(18px);
+      box-shadow: 0 0 30px rgba(0,212,255,0.15), 0 4px 20px rgba(0,0,0,0.7);
+      display: none; pointer-events: none;
+      font-size: 10px;
+    }
+    #inspectCard.show { display: block; pointer-events: all; }
+    #inspectCard-title {
+      font-family: 'Orbitron', sans-serif; font-size: 12px; font-weight: 700;
+      color: #fff; letter-spacing: 2px; margin-bottom: 10px;
+      border-bottom: 1px solid var(--border); padding-bottom: 7px;
+    }
+    .inspect-row {
+      display: flex; justify-content: space-between;
+      padding: 3px 0; color: rgba(180,220,255,0.6);
+    }
+    .inspect-row span:last-child { color: var(--accent2); font-weight: bold; }
+    .inspect-close {
+      position: absolute; top: 6px; right: 8px;
+      font-size: 14px; color: rgba(180,220,255,0.4);
+      cursor: pointer; line-height: 1; pointer-events: all;
+    }
+    .inspect-close:hover { color: var(--danger); }
+
+    /* ── DIM OVERLAY CLASSES for selection mode ── */
+    /* Applied via JS by toggling entity opacity */
+
+    /* ── CONTROLS ── */
+    #controls {
+      position: absolute; bottom: 10px; left: 10px;
+      background: var(--bg-panel); border: 1px solid var(--border);
+      border-radius: 6px; padding: 10px 14px;
+      z-index: 1000; display: flex; gap: 8px; align-items: center;
+      backdrop-filter: blur(12px);
+    }
+    .btn {
+      background: transparent; border: 1px solid rgba(0,212,255,0.3);
+      color: var(--accent); font-family: 'Share Tech Mono', monospace;
+      font-size: 10px; letter-spacing: 2px; padding: 5px 12px;
+      cursor: pointer; border-radius: 2px; text-transform: uppercase;
+      transition: all 0.18s;
+    }
+    .btn:hover { background: rgba(0,212,255,0.1); box-shadow: 0 0 8px rgba(0,212,255,0.2); }
+    .btn.on { background: rgba(0,212,255,0.15); border-color: var(--accent); color: #fff; }
+    .btn.danger-btn { border-color: rgba(255,51,102,0.35); color: var(--danger); }
+    .btn.danger-btn.on { background: rgba(255,51,102,0.1); border-color: var(--danger); }
+    .speed-wrap {
+      display: flex; align-items: center; gap: 7px;
+      font-size: 10px; color: rgba(180,220,255,0.5);
+    }
+    input[type=range] {
+      -webkit-appearance: none; width: 80px; height: 3px;
+      background: rgba(0,212,255,0.2); border-radius: 2px; outline: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 12px; height: 12px;
+      border-radius: 50%; background: var(--accent); cursor: pointer;
+      box-shadow: 0 0 6px var(--accent);
+    }
+
+    /* scrollbar */
+    #utPanel::-webkit-scrollbar { width: 4px; }
+    #utPanel::-webkit-scrollbar-track { background: rgba(0,212,255,0.04); }
+    #utPanel::-webkit-scrollbar-thumb { background: rgba(0,212,255,0.22); border-radius: 2px; }
+
+    /* sim clock */
+    #simClock { font-family:'Orbitron',sans-serif; font-size:12px; color:#ffd740; letter-spacing:3px; }
+  </style>
+</head>
+<body>
+
+<div id="cesiumContainer"></div>
+
+<!-- Header -->
+<div id="header">
+  <h1>⬡ LEO-2 ORBITAL NETWORK</h1>
+  <div id="simClock">T+0.0s</div>
+  <div class="live-badge"><div class="live-dot"></div>LIVE SIMULATION</div>
+</div>
+
+<!-- Stats Panel -->
+<div id="statsPanel" class="panel">
+  <p class="panel-title">◈ Network Status</p>
+  <div class="stat-row">
+    <span class="stat-label">Sat (Simulated)</span>
+    <span class="stat-value" id="currentSatSim">--</span>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label">Sat (Nearest Visual)</span>
+    <span class="stat-value muted" id="currentSatVis">--</span>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label">Total Handovers</span>
+    <span class="stat-value warn" id="handoverCount">0</span>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label">Bytes Received</span>
+    <span class="stat-value" id="bytesRx">0 B</span>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label">Throughput</span>
+    <span class="stat-value" id="throughput">0 KB/s</span>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label">Active UT Links</span>
+    <span class="stat-value" id="activeLinks">0</span>
+  </div>
+  <div class="stat-row">
+    <span class="stat-label">Sim Time</span>
+    <span class="stat-value" id="simTime">0s</span>
+  </div>
+</div>
+
+<!-- Mode Toggle -->
+<div id="modeToggle">
+  <span>VIEW MODE</span>
+  <button class="mode-btn active" id="btnSimMode">SIM TRUTH</button>
+  <button class="mode-btn" id="btnVisMode">VISUAL PROXIMITY</button>
+</div>
+
+<!-- Legend Panel (below mode toggle) -->
+<div id="legendPanel" class="panel">
+  <p class="panel-title">◈ Legend</p>
+
+  <div class="legend-section-title">Nodes</div>
+  <div class="legend-item">
+    <span class="leg-dot" style="background:var(--sat-active);box-shadow:0 0 6px var(--sat-active)"></span>
+    <span>Active Satellite (sim-linked)</span>
+  </div>
+  <div class="legend-item">
+    <span class="leg-dot" style="background:var(--sat-inactive);opacity:0.7"></span>
+    <span>Inactive Satellite</span>
+  </div>
+  <div class="legend-item">
+    <span class="leg-diamond" style="background:var(--gw-color);box-shadow:0 0 5px var(--gw-color)"></span>
+    <span>Gateway Station</span>
+  </div>
+  <div class="legend-item">
+    <span style="display:inline-block;width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:10px solid var(--sat-active);flex-shrink:0"></span>
+    <span>User Terminal (active)</span>
+  </div>
+  <div class="legend-item">
+    <span style="display:inline-block;width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:10px solid var(--ut-color);flex-shrink:0;opacity:0.6"></span>
+    <span>User Terminal (idle)</span>
+  </div>
+
+  <div class="legend-section-title">Links</div>
+  <div class="legend-item">
+    <div class="leg-line" style="background:linear-gradient(90deg,transparent,var(--link-sim),transparent)"></div>
+    <span>UT → Sat (Simulated Truth)</span>
+  </div>
+  <div class="legend-item">
+    <div class="leg-line dashed"></div>
+    <span>UT → Sat (Visual / Nearest)</span>
+  </div>
+  <div class="legend-item">
+    <div class="leg-line" style="background:linear-gradient(90deg,transparent,var(--link-gw),transparent)"></div>
+    <span>GW → Sat (Active)</span>
+  </div>
+</div>
+
+<!-- UT Status Panel -->
+<div id="utPanel" class="panel">
+  <p class="panel-title">◈ User Terminal Links</p>
+  <div id="utRows"></div>
+</div>
+
+<!-- Handover Toast -->
+<div id="handoverToast">⚡ HANDOVER EVENT</div>
+
+<!-- Inspect Card -->
+<div id="inspectCard">
+  <div class="inspect-close" id="inspectClose">✕</div>
+  <div id="inspectCard-title">SAT-?</div>
+  <div class="inspect-row"><span>Altitude</span><span id="ic-alt">--</span></div>
+  <div class="inspect-row"><span>Connected UTs</span><span id="ic-uts">--</span></div>
+  <div class="inspect-row"><span>Last Handover</span><span id="ic-ho">--</span></div>
+  <div class="inspect-row"><span>Throughput</span><span id="ic-thr">--</span></div>
+  <div class="inspect-row"><span>SINR</span><span id="ic-sinr">--</span></div>
+</div>
+
+<!-- Chart Panel -->
+<div id="chartContainer" class="panel">
+  <p class="panel-title">◈ Network &amp; PHY Metrics</p>
+  <div class="chart-block">
+    <div class="chart-label">Throughput (KB/s)<span>GW → UT traffic rate</span></div>
+    <div class="chart-wrap"><canvas id="throughputChart"></canvas></div>
+  </div>
+  <div class="chart-block">
+    <div class="chart-label">SINR (dB)<span>Signal-to-Interference+Noise Ratio</span></div>
+    <div class="chart-wrap"><canvas id="sinrChart"></canvas></div>
+  </div>
+  <div class="chart-block">
+    <div class="chart-label">Rx Power (dBm)<span>Received power at UT</span></div>
+    <div class="chart-wrap"><canvas id="powerChart"></canvas></div>
+  </div>
+</div>
+
+<!-- Controls -->
+<div id="controls">
+  <div class="speed-wrap">
+    <span>SPEED</span>
+    <input type="range" id="speedSlider" min="1" max="100" step="1" value="8">
+    <span id="speedVal">8×</span>
+  </div>
+  <button class="btn on" id="btnLinks">LINKS</button>
+  <button class="btn" id="btnDashed">VISUAL LINKS</button>
+  <button class="btn danger-btn" id="btnClearSel">CLEAR SEL</button>
+  <button class="btn" id="btnPause">PAUSE</button>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════
+//  CHARTS
+// ═══════════════════════════════════════════════
+function createMetricChart(canvasId, color) {
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  return new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{ data: [], borderColor: color, backgroundColor: color + '18', borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.4 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          enabled: true, mode: 'index', intersect: false,
+          backgroundColor: 'rgba(4,12,24,0.92)',
+          borderColor: color, borderWidth: 1,
+          titleColor: 'rgba(180,220,255,0.6)', bodyColor: color,
+          titleFont: { family: 'Share Tech Mono', size: 9 },
+          bodyFont:  { family: 'Share Tech Mono', size: 10 },
+          callbacks: { title: items => items[0]?.label + 's', label: item => item.formattedValue }
+        },
+        crosshair: false,
+      },
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { ticks: { color:'rgba(180,220,255,0.35)', font:{size:8}, maxTicksLimit:5 }, grid:{color:'rgba(0,212,255,0.05)'} },
+        y: { ticks: { color:'rgba(180,220,255,0.35)', font:{size:8}, maxTicksLimit:4 }, grid:{color:'rgba(0,212,255,0.05)'} }
+      }
+    }
+  });
+}
+
+function updateChartData(chart, data, currentTime, windowSec) {
+  if (!chart || !data || data.length === 0) return;
+  const w = data.filter(d => d.time >= currentTime - windowSec && d.time <= currentTime);
+  chart.data.labels = w.map(d => d.time.toFixed(0));
+  chart.data.datasets[0].data = w.map(d => d.value);
+  chart.update('none');
+}
+
+// ═══════════════════════════════════════════════
+//  CESIUM INIT
+// ═══════════════════════════════════════════════
+Cesium.Ion.defaultAccessToken = undefined;
+const viewer = new Cesium.Viewer('cesiumContainer', {
+  imageryProvider: new Cesium.SingleTileImageryProvider({
+    url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAEBgIApD5fRAAAAABJRU5ErkJggg=='
+  }),
+  baseLayerPicker: true, sceneModePicker: false,
+  navigationHelpButton: false, animation: true, timeline: true,
+  shouldAnimate: true, requestRenderMode: false, maximumRenderTimeChange: Infinity,
+  infoBox: false, selectionIndicator: false,
+});
+viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a1a30');
+viewer.scene.globe.enableLighting = true;
+viewer.scene.globe.maximumScreenSpaceError = 1.5;
+viewer.scene.globe.showWaterEffect = false;
+viewer.scene.skyBox = new Cesium.SkyBox({
+  sources: {
+    positiveX: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+    negativeX: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+    positiveY: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+    negativeY: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+    positiveZ: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+    negativeZ: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+  }
+});
+
+// ═══════════════════════════════════════════════
+//  ICON GENERATORS
+// ═══════════════════════════════════════════════
+function makeSatIcon(active, selected) {
+  const body  = active ? '#39ff14' : '#00e5ff';
+  const panel = active ? '#1a8c00' : '#1a6680';
+  const glow  = active ? '#39ff14' : '#00bfff';
+  const ring  = selected ? `<circle cx="18" cy="17" r="14" fill="none" stroke="#ffd740" stroke-width="1.5" opacity="0.9"/>` : '';
+  return 'data:image/svg+xml;base64,' + btoa(`<svg width="36" height="36" xmlns="http://www.w3.org/2000/svg">
+    <defs><filter id="g"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+    ${ring}
+    <rect x="1" y="15" width="10" height="5" rx="1" fill="${panel}" opacity="0.9"/>
+    <rect x="25" y="15" width="10" height="5" rx="1" fill="${panel}" opacity="0.9"/>
+    <line x1="5" y1="15" x2="5" y2="20" stroke="#ffffff22" stroke-width="0.5"/>
+    <line x1="29" y1="15" x2="29" y2="20" stroke="#ffffff22" stroke-width="0.5"/>
+    <rect x="11" y="12" width="14" height="11" rx="2" fill="${body}" filter="url(#g)" stroke="white" stroke-width="0.8"/>
+    <line x1="18" y1="12" x2="18" y2="7" stroke="${glow}" stroke-width="1.2"/>
+    <circle cx="18" cy="6" r="2" fill="${glow}" opacity="0.8"/>
+    ${active ? `<circle cx="18" cy="17" r="3" fill="white" opacity="0.9"/>` : ''}
+  </svg>`);
+}
+
+function makeGWIcon() {
+  return 'data:image/svg+xml;base64,' + btoa(`<svg width="28" height="28" xmlns="http://www.w3.org/2000/svg">
+    <defs><filter id="g2"><feGaussianBlur stdDeviation="1.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+    <polygon points="14,2 26,14 14,26 2,14" fill="#ff6b35" filter="url(#g2)" stroke="white" stroke-width="1"/>
+    <polygon points="14,6 22,14 14,22 6,14" fill="#ff8c55" opacity="0.7"/>
+    <circle cx="14" cy="14" r="3" fill="white" opacity="0.9"/>
+  </svg>`);
+}
+
+function makeUTIcon(active, selected) {
+  const col = active ? '#39ff14' : '#00bfff';
+  const ring = selected ? `<circle cx="12" cy="13" r="11" fill="none" stroke="#ffd740" stroke-width="1.5" opacity="0.9"/>` : '';
+  return 'data:image/svg+xml;base64,' + btoa(`<svg width="24" height="24" xmlns="http://www.w3.org/2000/svg">
+    <defs><filter id="g3"><feGaussianBlur stdDeviation="1.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+    ${ring}
+    <polygon points="12,2 22,20 2,20" fill="${col}" filter="url(#g3)" stroke="white" stroke-width="1" opacity="0.95"/>
+    ${active ? `<circle cx="12" cy="13" r="3" fill="white" opacity="0.8"/>` : ''}
+  </svg>`);
+}
+
+// ═══════════════════════════════════════════════
+//  MATERIAL HELPERS
+// ═══════════════════════════════════════════════
+function glowMat(hexColor, glowPower = 0.35) {
+  return new Cesium.PolylineGlowMaterialProperty({ glowPower, color: Cesium.Color.fromCssColorString(hexColor) });
+}
+function dashedMat(hexColor) {
+  return new Cesium.PolylineDashMaterialProperty({ color: Cesium.Color.fromCssColorString(hexColor), dashLength: 16, dashPattern: 0xFF00 });
+}
+
+// ═══════════════════════════════════════════════
+//  CHARTS
+// ═══════════════════════════════════════════════
+const throughputChart = createMetricChart('throughputChart', '#00ff88');
+const sinrChart       = createMetricChart('sinrChart',       '#00d4ff');
+const powerChart      = createMetricChart('powerChart',      '#ffaa00');
+
+// ═══════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════
+const satelliteEntities = {};
+const utEntities        = {};
+const utLinkSim         = {};   // simulated-data link (solid glow)
+const utLinkVis         = {};   // visual nearest link (dashed)
+const utCurrentSat      = {};   // from handover data
+const utPositions       = {};
+let gwLinkActive = null, gwLinkVisual = null, gwPosition = null;
+let handoverData = [], throughputData = [], sinrData = [], powerData = [];
+let handoverByUT = {};
+let currentConnectedSat = null;
+let handoverCount = 0, totalBytesRx = 0, frameCount = 0, maxTime = 0;
+let showLinks = true, showDashed = false, isPaused = false;
+let simMode = true;    // true = simulation truth, false = visual proximity
+let selectedUT  = null;
+let selectedSat = null;
+
+// Inspect card state
+let inspectSatId = null;
+let lastHandoverBySat = {};  // satId → last handover time
+let lastThroughputVal = 0, lastSinrVal = 0;
+
+// ═══════════════════════════════════════════════
+//  FORMAT HELPERS
+// ═══════════════════════════════════════════════
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(2) + ' MB';
+}
+
+// ═══════════════════════════════════════════════
+//  LOAD DATA
+// ═══════════════════════════════════════════════
+Promise.all([
+  fetch("orbits.json").then(r=>r.json()),
+  fetch("handovers.json").then(r=>r.json()),
+  fetch("throughput.json").then(r=>r.json()),
+  fetch("ground_stations.json").then(r=>r.json()),
+  fetch("sinr.json").then(r=>r.json()).catch(()=>[]),
+  fetch("rx_power.json").then(r=>r.json()).catch(()=>[]),
+]).then(([orbits, handovers, throughput, groundStations, sinr, power]) => {
+
+  // ── Handover processing ──
+  if (Array.isArray(handovers)) {
+    handoverData = handovers;
+    handovers.forEach(h => {
+      const uid = h.ut_id !== undefined ? String(h.ut_id) : 'default';
+      if (!handoverByUT[uid]) handoverByUT[uid] = [];
+      handoverByUT[uid].push(h);
+      const sid = String(h.new_sat);
+      if (!lastHandoverBySat[sid] || h.time > lastHandoverBySat[sid]) lastHandoverBySat[sid] = h.time;
+    });
+  } else {
+    Object.entries(handovers).forEach(([k, v]) => {
+      handoverByUT[String(k)] = v;
+      v.forEach(h => {
+        handoverData.push({...h, ut_id: k});
+        const sid = String(h.new_sat);
+        if (!lastHandoverBySat[sid] || h.time > lastHandoverBySat[sid]) lastHandoverBySat[sid] = h.time;
+      });
+    });
+    handoverData.sort((a,b)=>a.time-b.time);
+  }
+
+  // ── Metric data ──
+  throughputData = throughput.map(d=>({ time:d.time, value:d.bytes_rx/1024, bytes_rx:d.bytes_rx }));
+  sinrData  = sinr.map(d=>({ time:d.time, value:d.sinr }));
+  powerData = power.filter(d=>d.power>0).map(d=>({ time:d.time, value:10*Math.log10(d.power*1000) }));
+
+  // ── Clock setup ──
+  const START = Cesium.JulianDate.fromDate(new Date(2024,0,1,0,0,0));
+  viewer.clock.startTime = START;
+  viewer.clock.currentTime = START.clone();
+  Object.values(orbits).forEach(s => { if(s.length>0 && s[s.length-1].time>maxTime) maxTime=s[s.length-1].time; });
+  viewer.clock.stopTime  = Cesium.JulianDate.addSeconds(START, maxTime||3600, new Cesium.JulianDate());
+  viewer.clock.multiplier = 8;
+  viewer.clock.shouldAnimate = true;
+  viewer.clock.clockRange = Cesium.ClockRange.LOOP_STOP;
+  document.getElementById('speedSlider').value = 8;
+  if (maxTime>0 && viewer.timeline) viewer.timeline.zoomTo(viewer.clock.startTime, viewer.clock.stopTime);
+
+  // ── Animation loop ──
+  let lastFrameTime = performance.now();
+  function animate() {
+    if (viewer.clock.shouldAnimate && !viewer.isDestroyed() && !isPaused) {
+      const now = performance.now();
+      const deltaMs = Math.min(now - lastFrameTime, 100);
+      lastFrameTime = now;
+      if (Cesium.JulianDate.compare(viewer.clock.stopTime, viewer.clock.startTime)>0) {
+        const ds = (deltaMs/1000) * viewer.clock.multiplier;
+        viewer.clock.currentTime = Cesium.JulianDate.addSeconds(viewer.clock.currentTime, ds, new Cesium.JulianDate());
+        if (Cesium.JulianDate.compare(viewer.clock.currentTime, viewer.clock.stopTime)>=0) {
+          viewer.clock.currentTime = viewer.clock.startTime.clone();
+          resetSimState();
+        }
+      }
+    } else lastFrameTime = performance.now();
+    requestAnimationFrame(animate);
+  }
+  setTimeout(()=>{ lastFrameTime=performance.now(); animate(); }, 1200);
+
+  // ── Gateways ──
+  groundStations.gateways.forEach(gw => {
+    gwPosition = Cesium.Cartesian3.fromDegrees(gw.lon, gw.lat, gw.alt||0);
+    viewer.entities.add({
+      name:'Gateway-'+gw.id, position:gwPosition,
+      billboard:{ image:makeGWIcon(), width:28, height:28, verticalOrigin:Cesium.VerticalOrigin.BOTTOM, scaleByDistance:new Cesium.NearFarScalar(1e5,1.5,1.5e7,0.7) },
+      label:{ text:'GW-'+gw.id, font:'10px Share Tech Mono', fillColor:Cesium.Color.fromCssColorString('#ff6b35'), outlineColor:Cesium.Color.BLACK, outlineWidth:2, style:Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset:new Cesium.Cartesian2(0,-34), scaleByDistance:new Cesium.NearFarScalar(1e5,1.2,8e6,0) }
+    });
+  });
+  if (gwPosition) {
+    gwLinkActive = viewer.entities.add({ polyline:{ positions:[gwPosition,gwPosition], width:3, material:glowMat('#ff6b35',0.4), arcType:Cesium.ArcType.NONE }, show:false });
+    gwLinkVisual = viewer.entities.add({ polyline:{ positions:[gwPosition,gwPosition], width:1.5, material:dashedMat('#ff6b3555'), arcType:Cesium.ArcType.NONE }, show:false });
+  }
+
+  // ── UTs ──
+  const utRowContainer = document.getElementById('utRows');
+  groundStations.uts.forEach(ut => {
+    const uid   = String(ut.id);
+    const utPos = Cesium.Cartesian3.fromDegrees(ut.lon, ut.lat, ut.alt||0);
+    utPositions[uid] = utPos;
+    const utEnt = viewer.entities.add({
+      name:'UT-'+uid, position:utPos,
+      billboard:{ image:makeUTIcon(false,false), width:24, height:24, verticalOrigin:Cesium.VerticalOrigin.BOTTOM, scaleByDistance:new Cesium.NearFarScalar(1e5,1.5,1.5e7,0.6) },
+      label:{ text:'UT'+uid, font:'10px Share Tech Mono', fillColor:Cesium.Color.fromCssColorString('#00bfff'), outlineColor:Cesium.Color.BLACK, outlineWidth:2, style:Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset:new Cesium.Cartesian2(0,-28), scaleByDistance:new Cesium.NearFarScalar(1e5,1.1,6e6,0) }
+    });
+    utEntities[uid]   = utEnt;
+    utCurrentSat[uid] = null;
+
+    // Simulated link (solid glow, green)
+    utLinkSim[uid] = viewer.entities.add({
+      polyline:{ positions:[utPos,utPos], width:2.5, material:glowMat('#39ff14',0.45), arcType:Cesium.ArcType.NONE }, show:false
+    });
+    // Visual nearest link (dashed, cyan)
+    utLinkVis[uid] = viewer.entities.add({
+      polyline:{ positions:[utPos,utPos], width:1.2, material:dashedMat('#00bfff70'), arcType:Cesium.ArcType.NONE }, show:false
+    });
+
+    // UT row
+    const row = document.createElement('div');
+    row.className = 'ut-row';
+    row.innerHTML = `
+      <div class="ut-row-left">
+        <div class="ut-dot inactive" id="utdot-${uid}"></div>
+        <span class="ut-id">UT${uid}</span>
+      </div>
+      <span class="ut-sat none" id="utsat-${uid}">NO LINK</span>
+      <span class="ut-mode-badge vis" id="utbadge-${uid}" style="display:none">VIS</span>`;
+    row.addEventListener('click', ()=>selectUT(uid));
+    utRowContainer.appendChild(row);
+  });
+
+  // ── Satellites ──
+  viewer.entities.suspendEvents();
+  Object.keys(orbits).forEach(id => {
+    const samples = orbits[id];
+    const posProp = new Cesium.SampledPositionProperty();
+    const times = [], positions = [];
+    samples.forEach(p => {
+      times.push(Cesium.JulianDate.addSeconds(START, p.time, new Cesium.JulianDate()));
+      positions.push(p.x!==undefined ? new Cesium.Cartesian3(p.x,p.y,p.z) : Cesium.Cartesian3.fromDegrees(p.lon,p.lat,p.alt));
+    });
+    posProp.addSamples(times, positions);
+    posProp.setInterpolationOptions({ interpolationDegree:2, interpolationAlgorithm:Cesium.LagrangePolynomialApproximation });
+    const sat = viewer.entities.add({
+      name:'SAT-'+id, position:posProp,
+      billboard:{ image:makeSatIcon(false,false), width:36, height:36, verticalOrigin:Cesium.VerticalOrigin.CENTER, scaleByDistance:new Cesium.NearFarScalar(5e5,1.4,5e7,0.5), distanceDisplayCondition:new Cesium.DistanceDisplayCondition(0,6e7) },
+      label:{ text:'SAT-'+id, font:'10px Share Tech Mono', fillColor:Cesium.Color.fromCssColorString('#00e5ff'), outlineColor:Cesium.Color.BLACK, outlineWidth:2, style:Cesium.LabelStyle.FILL_AND_OUTLINE, show:false, distanceDisplayCondition:new Cesium.DistanceDisplayCondition(0,2e6) },
+      path:{ resolution:60, material:new Cesium.PolylineGlowMaterialProperty({ glowPower:0.07, color:Cesium.Color.fromCssColorString('#00d4ff30') }), width:1, leadTime:0, trailTime:90 }
+    });
+    satelliteEntities[id] = { entity:sat, posProp };
+  });
+  viewer.entities.resumeEvents();
+
+  // ── Per-UT handover index ──
+  const utLastHOIndex = {};
+  groundStations.uts.forEach(ut => { utLastHOIndex[String(ut.id)] = -1; });
+
+  // ── Camera ──
+  const cLat = groundStations.gateways[0]?.lat ?? 18;
+  const cLon = groundStations.gateways[0]?.lon ?? 110;
+  viewer.camera.flyTo({ destination:Cesium.Cartesian3.fromDegrees(cLon, cLat, 10_000_000), duration:2.5 });
+
+  // ── Cesium click handler (satellite inspect + UT selection) ──
+  viewer.screenSpaceEventHandler.setInputAction(click => {
+    const picked = viewer.scene.pick(click.position);
+    if (Cesium.defined(picked) && Cesium.defined(picked.id)) {
+      const name = picked.id.name || '';
+      if (name.startsWith('SAT-')) {
+        const sid = name.replace('SAT-','');
+        showInspectCard(sid, click.position, viewer.clock.currentTime, START);
+        return;
+      }
+      if (name.startsWith('UT-')) {
+        const uid = name.replace('UT-','');
+        selectUT(uid);
+        return;
+      }
+    }
+    // Deselect
+    hideInspectCard();
+    clearSelection();
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+  // ════════════════════════════════════════════
+  //  SELECTION
+  // ════════════════════════════════════════════
+  function selectUT(uid) {
+    clearSelection();
+    selectedUT = uid;
+    // Highlight UT
+    utEntities[uid].billboard.image = makeUTIcon(!!utCurrentSat[uid], true);
+    // Highlight its sat
+    const sid = utCurrentSat[uid];
+    if (sid && satelliteEntities[sid]) {
+      selectedSat = sid;
+      satelliteEntities[sid].entity.billboard.image = makeSatIcon(true, true);
+    }
+    // Mark row
+    document.querySelectorAll('.ut-row').forEach(r => r.classList.remove('selected'));
+    const rows = document.querySelectorAll('.ut-row');
+    const utIds = Object.keys(utPositions);
+    const idx = utIds.indexOf(uid);
+    if (idx >= 0 && rows[idx]) rows[idx].classList.add('selected');
+  }
+
+  window.selectUT = selectUT;
+
+  function clearSelection() {
+    selectedUT = null; selectedSat = null;
+    document.querySelectorAll('.ut-row').forEach(r => r.classList.remove('selected'));
+  }
+
+  window.clearSelection = clearSelection;
+
+  // ════════════════════════════════════════════
+  //  INSPECT CARD
+  // ════════════════════════════════════════════
+  function showInspectCard(sid, screenPos, now, START) {
+    inspectSatId = sid;
+    const card = document.getElementById('inspectCard');
+    document.getElementById('inspectCard-title').textContent = 'SAT-' + sid;
+    // Altitude
+    const satPos = satelliteEntities[sid]?.posProp?.getValue(now);
+    let altStr = '--';
+    if (satPos) {
+      const carto = Cesium.Cartographic.fromCartesian(satPos);
+      altStr = (carto.height / 1000).toFixed(0) + ' km';
+    }
+    document.getElementById('ic-alt').textContent = altStr;
+    // Connected UTs
+    const connectedUTs = Object.entries(utCurrentSat).filter(([,v])=>String(v)===String(sid)).map(([k])=>'UT'+k);
+    document.getElementById('ic-uts').textContent = connectedUTs.length > 0 ? connectedUTs.join(', ') : 'None';
+    // Last handover
+    const lastHO = lastHandoverBySat[String(sid)];
+    document.getElementById('ic-ho').textContent = lastHO !== undefined ? lastHO.toFixed(1)+'s' : 'N/A';
+    // Throughput
+    document.getElementById('ic-thr').textContent = lastThroughputVal.toFixed(2) + ' KB/s';
+    // SINR
+    document.getElementById('ic-sinr').textContent = lastSinrVal.toFixed(1) + ' dB';
+
+    // Position card near click
+    card.style.left = Math.min(screenPos.x + 12, window.innerWidth - 260) + 'px';
+    card.style.top  = Math.min(screenPos.y - 20, window.innerHeight - 200) + 'px';
+    card.classList.add('show');
+  }
+
+  function hideInspectCard() {
+    inspectSatId = null;
+    document.getElementById('inspectCard').classList.remove('show');
+  }
+
+  window.hideInspectCard = hideInspectCard;
+
+  document.getElementById('inspectClose').addEventListener('click', e => {
+    e.stopPropagation(); hideInspectCard();
+  });
+
+  // ════════════════════════════════════════════
+  //  RESET
+  // ════════════════════════════════════════════
+  function resetSimState() {
+    handoverCount = 0; totalBytesRx = 0; currentConnectedSat = null;
+    Object.keys(utCurrentSat).forEach(uid => { utCurrentSat[uid] = null; });
+    Object.keys(utLastHOIndex).forEach(uid => { utLastHOIndex[uid] = -1; });
+    lastGlobalHOIndex = -1; lastThroughputIndex = -1;
+    [throughputChart, sinrChart, powerChart].forEach(c => {
+      if (c?.data) { c.data.labels=[]; c.data.datasets[0].data=[]; c.update('none'); }
+    });
+  }
+
+  // ════════════════════════════════════════════
+  //  TICK
+  // ════════════════════════════════════════════
+  let lastThroughputIndex = -1;
+  let lastGlobalHOIndex   = -1;
+
+  viewer.clock.onTick.addEventListener(() => {
+    frameCount++;
+    const now = viewer.clock.currentTime;
+    const simSeconds = Cesium.JulianDate.secondsDifference(now, START);
+    if (simSeconds < 0) return;
+
+    document.getElementById('simClock').textContent = 'T+' + simSeconds.toFixed(1) + 's';
+    document.getElementById('simTime').textContent  = simSeconds.toFixed(1) + 's';
+
+    // ── Global handover events ──
+    for (let i = lastGlobalHOIndex + 1; i < handoverData.length; i++) {
+      if (handoverData[i].time <= simSeconds) {
+        currentConnectedSat = handoverData[i].new_sat;
+        handoverCount++;
+        lastGlobalHOIndex = i;
+        const toast = document.getElementById('handoverToast');
+        toast.textContent = `⚡ HANDOVER → SAT-${handoverData[i].new_sat}`;
+        toast.classList.add('show');
+        setTimeout(()=>toast.classList.remove('show'), 1800);
+        const el = document.getElementById('currentSatSim');
+        el.classList.add('handover-flash');
+        setTimeout(()=>el.classList.remove('handover-flash'), 700);
+      } else break;
+    }
+
+    // ── Per-UT handover events ──
+    Object.keys(handoverByUT).forEach(uid => {
+      const hoList = handoverByUT[uid];
+      let idx = utLastHOIndex[uid] ?? -1;
+      for (let i = idx+1; i<hoList.length; i++) {
+        if (hoList[i].time <= simSeconds) {
+          utCurrentSat[uid]  = String(hoList[i].new_sat);
+          utLastHOIndex[uid] = i;
+          if (lastHandoverBySat[utCurrentSat[uid]] === undefined || hoList[i].time > lastHandoverBySat[utCurrentSat[uid]])
+            lastHandoverBySat[utCurrentSat[uid]] = hoList[i].time;
+        } else break;
+      }
+    });
+
+    // ── Throttle heavy work ──
+    if (frameCount % 3 !== 0) return;
+
+    // ── Find nearest sat (for visual mode / fallback) ──
+    let nearestSatId = null, nearestSatPos = null, nearestDist = Number.MAX_VALUE;
+    const refPos = gwPosition || Object.values(utPositions)[0];
+    Object.entries(satelliteEntities).forEach(([id, se]) => {
+      const pos = se.posProp.getValue(now);
+      if (!pos || !refPos) return;
+      const d = Cesium.Cartesian3.distance(refPos, pos);
+      if (d < nearestDist) { nearestDist = d; nearestSatId = id; nearestSatPos = pos; }
+    });
+    const visThreshold = 3_500_000;
+
+    // ── Determine active sats ──
+    const simActiveSats = new Set([currentConnectedSat, ...Object.values(utCurrentSat)].filter(Boolean).map(String));
+    const allActiveSats = new Set([...simActiveSats, nearestSatId].filter(Boolean));
+
+    // ── Update satellite visuals ──
+    Object.entries(satelliteEntities).forEach(([id, se]) => {
+      const isSim    = simActiveSats.has(id);
+      const isNear   = id === nearestSatId;
+      const isActive = simMode ? isSim : isNear;
+      const isSel    = id === selectedSat;
+      se.entity.billboard.image = makeSatIcon(isActive, isSel);
+      // Fade label for active only
+      se.entity.label.show = isActive || isSel;
+      if (isActive) se.entity.label.fillColor = Cesium.Color.fromCssColorString('#39ff14');
+    });
+
+    // ── GW links ──
+    if (gwPosition && gwLinkActive && gwLinkVisual) {
+      const gwSimPos = currentConnectedSat ? satelliteEntities[currentConnectedSat]?.posProp?.getValue(now) : null;
+      gwLinkActive.polyline.positions = [gwPosition, gwSimPos || gwPosition];
+      gwLinkActive.show = !!(gwSimPos && showLinks);
+      gwLinkVisual.polyline.positions = [gwPosition, nearestSatPos || gwPosition];
+      gwLinkVisual.show = !!(nearestSatPos && showLinks && showDashed && nearestDist < visThreshold);
+    }
+
+    // ── Per-UT links ──
+    let activeLinkCount = 0;
+    Object.keys(utPositions).forEach(uid => {
+      const utPos = utPositions[uid];
+      if (!utPos) return;
+
+      const simSatId  = utCurrentSat[uid];
+      const simSatPos = simSatId ? satelliteEntities[simSatId]?.posProp?.getValue(now) : null;
+
+      // In SIM mode: use sim link if available
+      // In VISUAL mode: always show nearest
+      let activePos = null;
+      let modeIsSim = false;
+
+      if (simMode) {
+        if (simSatPos) { activePos = simSatPos; modeIsSim = true; }
+        else {
+          // fallback to nearest even in sim mode
+          let bd=Number.MAX_VALUE;
+          Object.entries(satelliteEntities).forEach(([id,se])=>{ const p=se.posProp.getValue(now); if(!p)return; const d=Cesium.Cartesian3.distance(utPos,p); if(d<bd&&d<visThreshold){bd=d;activePos=p;} });
+        }
+      } else {
+        // visual mode: always nearest
+        let bd=Number.MAX_VALUE;
+        Object.entries(satelliteEntities).forEach(([id,se])=>{ const p=se.posProp.getValue(now); if(!p)return; const d=Cesium.Cartesian3.distance(utPos,p); if(d<bd&&d<visThreshold){bd=d;activePos=p;} });
+      }
+
+      // Active (sim/visual) link
+      if (activePos && showLinks) {
+        utLinkSim[uid].polyline.positions = [utPos, activePos];
+        utLinkSim[uid].show = true;
+        activeLinkCount++;
+      } else { utLinkSim[uid].show = false; }
+
+      // Dashed visual link (nearest, skip already-linked)
+      if (showLinks && showDashed) {
+        let nearPos=null, nd=Number.MAX_VALUE;
+        Object.entries(satelliteEntities).forEach(([id,se])=>{ if(id===simSatId)return; const p=se.posProp.getValue(now); if(!p)return; const d=Cesium.Cartesian3.distance(utPos,p); if(d<nd&&d<visThreshold){nd=d;nearPos=p;} });
+        if (nearPos) { utLinkVis[uid].polyline.positions=[utPos,nearPos]; utLinkVis[uid].show=true; }
+        else utLinkVis[uid].show=false;
+      } else { utLinkVis[uid].show=false; }
+
+      // ── UT billboard ──
+      const isLinked = utLinkSim[uid].show;
+      const isSel = uid === selectedUT;
+      utEntities[uid].billboard.image = makeUTIcon(isLinked, isSel);
+
+      // ── UT panel row ──
+      const dot   = document.getElementById('utdot-'+uid);
+      const satEl = document.getElementById('utsat-'+uid);
+      const badge = document.getElementById('utbadge-'+uid);
+      if (dot && satEl) {
+        if (isLinked && simSatId && simMode) {
+          dot.className='ut-dot active';
+          satEl.className='ut-sat sim';
+          satEl.textContent='SAT-'+simSatId;
+          if(badge){badge.style.display='inline';badge.className='ut-mode-badge sim';badge.textContent='SIM';}
+        } else if (isLinked) {
+          dot.className='ut-dot active';
+          satEl.className='ut-sat vis';
+          satEl.textContent='NEAREST';
+          if(badge){badge.style.display='inline';badge.className='ut-mode-badge vis';badge.textContent='VIS';}
+        } else {
+          dot.className='ut-dot inactive';
+          satEl.className='ut-sat none';
+          satEl.textContent='NO LINK';
+          if(badge) badge.style.display='none';
+        }
+      }
+    });
+
+    // ── Stats panel ──
+    const displaySimSat = currentConnectedSat ? 'SAT-'+currentConnectedSat : '--';
+    const displayVisSat = nearestSatId ? 'SAT-'+nearestSatId : '--';
+    document.getElementById('currentSatSim').textContent = displaySimSat;
+    document.getElementById('currentSatVis').textContent = displayVisSat;
+    document.getElementById('handoverCount').textContent = handoverCount;
+    document.getElementById('activeLinks').textContent   = activeLinkCount;
+
+    // ── Throughput ──
+    for (let i=lastThroughputIndex+1; i<throughputData.length; i++) {
+      if (throughputData[i].time <= simSeconds) {
+        const bps = throughputData[i].bytes_rx;
+        totalBytesRx += bps;
+        lastThroughputVal = bps/1024;
+        document.getElementById('bytesRx').textContent    = formatBytes(totalBytesRx);
+        document.getElementById('throughput').textContent = lastThroughputVal.toFixed(2)+' KB/s';
+        lastThroughputIndex = i;
+      } else break;
+    }
+    // Latest SINR for inspect
+    const latestSinr = sinrData.filter(d=>d.time<=simSeconds);
+    if (latestSinr.length>0) lastSinrVal = latestSinr[latestSinr.length-1].value;
+
+    // ── Update inspect card if open ──
+    if (inspectSatId) {
+      const sid = inspectSatId;
+      const sp  = satelliteEntities[sid]?.posProp?.getValue(now);
+      if (sp) { const c=Cesium.Cartographic.fromCartesian(sp); document.getElementById('ic-alt').textContent=(c.height/1000).toFixed(0)+' km'; }
+      const cUTs = Object.entries(utCurrentSat).filter(([,v])=>String(v)===String(sid)).map(([k])=>'UT'+k);
+      document.getElementById('ic-uts').textContent = cUTs.length>0?cUTs.join(', '):'None';
+      document.getElementById('ic-thr').textContent = lastThroughputVal.toFixed(2)+' KB/s';
+      document.getElementById('ic-sinr').textContent = lastSinrVal.toFixed(1)+' dB';
+    }
+
+    // ── Charts ──
+    updateChartData(throughputChart, throughputData, simSeconds, 60);
+    updateChartData(sinrChart,       sinrData,       simSeconds, 60);
+    updateChartData(powerChart,      powerData,      simSeconds, 60);
+  });
+
+}).catch(err => {
+  console.error('Failed to load data:', err);
+  alert('Failed to load simulation data. Check console for details.');
+});
+
+// ═══════════════════════════════════════════════
+//  CONTROLS
+// ═══════════════════════════════════════════════
+document.getElementById('speedSlider').addEventListener('input', e => {
+  const v = parseInt(e.target.value);
+  viewer.clock.multiplier = v;
+  document.getElementById('speedVal').textContent = v+'×';
+});
+document.getElementById('btnLinks').addEventListener('click', e => {
+  showLinks = !showLinks;
+  e.target.classList.toggle('on', showLinks);
+});
+document.getElementById('btnDashed').addEventListener('click', e => {
+  showDashed = !showDashed;
+  e.target.classList.toggle('on', showDashed);
+});
+document.getElementById('btnPause').addEventListener('click', e => {
+  isPaused = !isPaused;
+  viewer.clock.shouldAnimate = !isPaused;
+  e.target.textContent = isPaused ? 'RESUME' : 'PAUSE';
+  e.target.classList.toggle('on', isPaused);
+});
+document.getElementById('btnClearSel').addEventListener('click', () => {
+  if (typeof clearSelection === 'function') clearSelection();
+  if (typeof hideInspectCard === 'function') hideInspectCard();
+});
+
+// Mode toggle
+document.getElementById('btnSimMode').addEventListener('click', () => {
+  simMode = true;
+  document.getElementById('btnSimMode').classList.add('active');
+  document.getElementById('btnVisMode').classList.remove('active');
+});
+document.getElementById('btnVisMode').addEventListener('click', () => {
+  simMode = false;
+  document.getElementById('btnVisMode').classList.add('active');
+  document.getElementById('btnSimMode').classList.remove('active');
+});
+</script>
+</body>
+</html>
